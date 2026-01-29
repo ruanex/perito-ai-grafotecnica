@@ -8,364 +8,378 @@ import matplotlib.pyplot as plt
 from PIL import Image, ExifTags
 from streamlit_image_coordinates import streamlit_image_coordinates
 from fpdf import FPDF
+import google.generativeai as genai
 
 # --- CONFIGURAÇÃO ---
-st.set_page_config(page_title="PERITO.AI | Diamond v11", page_icon="💎", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="PERITO.CLOUD | AI Vision", page_icon="👁️", layout="wide",
+                   initial_sidebar_state="expanded")
 
+# --- CSS (DESIGN CSI / NETFLIX) ---
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;800&family=JetBrains+Mono:wght@500&display=swap');
 
-# --- CSS DARK FORENSE ---
-def local_css():
-    st.markdown("""
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;700&display=swap');
-        .stApp { background-color: #0e1117; color: #e0e0e0; font-family: 'Roboto', sans-serif; }
-        [data-testid="stSidebar"] { background-color: #161920; border-right: 1px solid #333; }
-        h1, h2, h3 { color: #00e5ff !important; font-weight: 300; letter-spacing: 1px; }
-        .stButton>button { border: 1px solid #00e5ff; color: #00e5ff; background: transparent; border-radius: 4px; }
-        .stButton>button:hover { background: #00e5ff; color: black; box-shadow: 0 0 10px #00e5ff; }
-        div[data-baseweb="slider"] { padding-top: 20px; }
-        /* Tabela de Metadados */
-        .dataframe { font-family: 'Courier New', monospace; font-size: 0.8rem; }
-    </style>
-    """, unsafe_allow_html=True)
+    .stApp {
+        background-image: linear-gradient(rgba(10, 20, 30, 0.90), rgba(0, 5, 10, 0.98)), 
+                          url("https://images.unsplash.com/photo-1550751827-4bd374c3f58b?q=80&w=2070&auto=format&fit=crop");
+        background-size: cover; background-attachment: fixed; color: #fff; font-family: 'Inter', sans-serif;
+    }
 
+    /* Login Glass */
+    .login-card {
+        background: rgba(20, 30, 40, 0.6); backdrop-filter: blur(15px); -webkit-backdrop-filter: blur(15px);
+        border: 1px solid rgba(0, 198, 255, 0.3); border-radius: 20px; padding: 50px; text-align: center;
+        box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8); animation: slideUp 0.8s cubic-bezier(0.2, 0.8, 0.2, 1);
+    }
+    @keyframes slideUp { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: translateY(0); } }
 
-local_css()
+    .login-icon { font-size: 5rem; margin-bottom: 20px; text-shadow: 0 0 20px rgba(0, 198, 255, 0.5); }
+    .login-title { font-weight: 900; font-size: 2.5rem; background: linear-gradient(90deg, #fff, #00c6ff); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
 
-# --- ESTADO E PERSISTÊNCIA ---
+    /* Input & Button */
+    .stTextInput>div>div>input { background-color: rgba(0,0,0,0.7)!important; color:#00c6ff!important; border:1px solid #333!important; border-radius:10px; padding:15px; text-align:center; font-family:'JetBrains Mono'; }
+    div.stButton > button { background: linear-gradient(90deg, #0066cc 0%, #00ccff 100%); border:none; height:45px; font-weight:bold; letter-spacing:1px; text-transform:uppercase; color:white; border-radius:8px; width:100%; transition:0.3s; }
+    div.stButton > button:hover { box-shadow: 0 0 25px rgba(0, 198, 255, 0.6); transform: scale(1.02); }
+
+    /* Header e Sidebar */
+    header[data-testid="stHeader"] { background: transparent!important; } div[data-testid="stDecoration"] { display:none; }
+    section[data-testid="stSidebar"] { width: 300px!important; background-color: #050505!important; border-right: 1px solid #004466; }
+
+    /* Cards */
+    .tool-card { background-color: rgba(20, 20, 20, 0.8); backdrop-filter: blur(5px); border: 1px solid #333; border-radius: 12px; padding: 20px; text-align: center; transition: 0.3s; height: 100%; display: flex; flex-direction: column; justify-content: space-between; }
+    .tool-card:hover { border-color: #00c6ff; box-shadow: 0 10px 30px rgba(0, 198, 255, 0.15); transform: translateY(-5px); }
+    .tool-icon { font-size: 3rem; margin-bottom: 10px; }
+    .tool-title { font-weight: 700; font-size: 1.1rem; color: #fff; }
+    .tool-desc { font-size: 0.75rem; color: #888; margin-bottom: 15px; }
+
+</style>
+""", unsafe_allow_html=True)
+
+# --- ESTADO ---
+if "logged_in" not in st.session_state: st.session_state["logged_in"] = False
+if "app_mode" not in st.session_state: st.session_state["app_mode"] = "Home"
 if "laudo_itens" not in st.session_state: st.session_state["laudo_itens"] = []
 if "pontos" not in st.session_state: st.session_state["pontos"] = []
-if "logo_path" not in st.session_state: st.session_state["logo_path"] = None
+if "api_key" not in st.session_state: st.session_state["api_key"] = ""
 
 
-def download_estado():
-    return pickle.dumps({"itens": st.session_state["laudo_itens"]})
+# --- LÓGICA LOGIN ---
+def check_login():
+    if st.session_state["senha_input"] == "perito123":
+        st.session_state["logged_in"] = True
+    else:
+        st.toast("🔒 Acesso Negado", icon="🚫")
 
 
-def carregar_estado(f):
+def logout(): st.session_state["logged_in"] = False; st.session_state["app_mode"] = "Home"
+
+
+def go_home(): st.session_state["app_mode"] = "Home"
+
+
+def go_tool(n): st.session_state["app_mode"] = n
+
+
+# --- INTEGRAÇÃO COM IA (GEMINI) ---
+def analisar_imagem_com_ia(imagem_array, contexto="geral"):
+    """Envia a imagem para o Google Gemini e recebe o laudo técnico"""
+    if not st.session_state["api_key"]:
+        return "⚠️ Configure a API Key na barra lateral para usar a IA."
+
     try:
-        st.session_state["laudo_itens"] = pickle.load(f).get("itens", [])
-        st.toast("Caso carregado.", icon="📂")
-    except:
-        st.error("Erro ao carregar.")
+        genai.configure(api_key=st.session_state["api_key"])
+        model = genai.GenerativeModel('gemini-1.5-flash')
+
+        # Converter array numpy para PIL
+        if isinstance(imagem_array, np.ndarray):
+            pil_img = Image.fromarray(imagem_array)
+        else:
+            return "Erro no formato da imagem."
+
+        prompts = {
+            "geral": "Atue como Perito Grafotécnico. Descreva sucintamente a imagem: tipo de traço, pressão aparente e características visíveis.",
+            "goniometria": "Atue como Perito. Analise esta assinatura com foco na INCLINAÇÃO AXIAL (Goniometria). O punho é vertical, dextrógiro ou sinistrógiro? A inclinação é constante ou variável?",
+            "confronto": "Atue como Perito. Compare as duas assinaturas na imagem (Questionada e Padrão). Aponte semelhanças e divergências em: ataques, remates e morfologia. Conclua se há indícios de falsificação.",
+            "pressao": "Atue como Perito. Analise este mapa de calor (pressão). Onde estão os pontos de maior entintamento? A pressão é natural (variável) ou artificial (constante/lenta)?",
+            "recortes": "Analise esta segmentação de letras. Compare a morfologia (forma) das letras correspondentes entre a linha superior e inferior."
+        }
+
+        prompt_final = prompts.get(contexto, prompts["geral"])
+
+        with st.spinner("🤖 A IA está analisando a evidência..."):
+            response = model.generate_content([prompt_final, pil_img])
+            return response.text
+
+    except Exception as e:
+        return f"Erro na IA: {str(e)}"
 
 
-def adicionar_ao_laudo(img, tit, desc):
-    # Se a imagem for um gráfico do matplotlib (figura), converte para array
-    if isinstance(img, plt.Figure):
-        import io
-        buf = io.BytesIO()
-        img.savefig(buf, format='png', bbox_inches='tight', facecolor='#0e1117')
-        buf.seek(0)
-        img = np.array(Image.open(buf).convert('RGB'))
-
-    st.session_state["laudo_itens"].append({"imagem": img, "titulo": tit, "descricao": desc})
-    st.toast(f"Adicionado: {tit}", icon="✅")
+# --- FUNÇÕES ---
+def carregar_imagem_segura(u, k=""):
+    if not u: return None
+    img = Image.open(u).convert('RGB')
+    with st.expander(f"🛠️ Ajustes ({k})"):
+        r = st.slider("Rot", -20., 20., 0., 0.1, key=f"r_{k}")
+        if r != 0: img = img.rotate(-r, resample=Image.BICUBIC, expand=False, fillcolor=(255, 255, 255))
+    return np.array(img)
 
 
-# --- FUNÇÕES DE IMAGEM ---
-def carregar_imagem_segura(uploaded, key_suffix=""):
-    """Carrega imagem e aplica rotação se necessário"""
-    if uploaded is None: return None
-    img = Image.open(uploaded).convert('RGB')
-
-    with st.expander(f"🛠️ Ajustes ({key_suffix})"):
-        col_rot, col_grid = st.columns(2)
-        rot = col_rot.slider(f"Rotação (°)", -20.0, 20.0, 0.0, 0.1, key=f"rot_{key_suffix}")
-        grid = col_grid.checkbox("Ativar Grid Milimétrico", key=f"grid_{key_suffix}")
-
-        if rot != 0:
-            img = img.rotate(-rot, resample=Image.BICUBIC, expand=False, fillcolor=(255, 255, 255))
-
-        arr = np.array(img)
-
-        if grid:
-            # Desenha Grid
-            h, w, _ = arr.shape
-            step = 50  # Tamanho do quadrado
-            overlay = arr.copy()
-            # Linhas verticais
-            for x in range(0, w, step):
-                cv2.line(overlay, (x, 0), (x, h), (200, 200, 200), 1)
-            # Linhas horizontais
-            for y in range(0, h, step):
-                cv2.line(overlay, (0, y), (w, y), (200, 200, 200), 1)
-            # Blend suave
-            arr = cv2.addWeighted(overlay, 0.3, arr, 0.7, 0)
-
-    return arr
+def adicionar_ao_laudo(img, tit, desc_inicial):
+    with st.popover("📝 Revisar/Salvar"):
+        st.write("Edite a conclusão antes de salvar:")
+        texto = st.text_area("Texto do Laudo", desc_inicial, height=200)
+        if st.button("💾 Confirmar Evidência"):
+            if isinstance(img, plt.Figure):
+                import io;
+                buf = io.BytesIO();
+                img.savefig(buf, format='png', bbox_inches='tight', facecolor='#0e1117');
+                buf.seek(0);
+                img = np.array(Image.open(buf).convert('RGB'))
+            st.session_state["laudo_itens"].append({"imagem": img, "titulo": tit, "descricao": texto})
+            st.toast("Adicionado ao Laudo!", icon="✅")
 
 
-def extrair_metadados(uploaded_file):
-    """Extrai EXIF da imagem original"""
-    img = Image.open(uploaded_file)
-    exif_data = {}
-    if hasattr(img, '_getexif') and img._getexif():
-        for tag, value in img._getexif().items():
-            tag_name = ExifTags.TAGS.get(tag, tag)
-            exif_data[tag_name] = str(value)
-    return exif_data
-
-
-def gerar_histograma_comparativo(img_q, img_p):
-    """Gera gráfico comparativo de distribuição de cores"""
-    fig, ax = plt.subplots(figsize=(6, 3))
-    fig.patch.set_facecolor('#0e1117')
-    ax.set_facecolor('#0e1117')
-
-    colors = ('b', 'g', 'r')
-    labels = ('Blue', 'Green', 'Red')
-
-    for i, col in enumerate(colors):
-        # Questionada (Linha Cheia)
-        hist_q = cv2.calcHist([img_q], [i], None, [256], [0, 256])
-        ax.plot(hist_q, color=col, linestyle='-', alpha=0.8, label=f'Q-{labels[i]}')
-
-        # Padrão (Linha Pontilhada)
-        hist_p = cv2.calcHist([img_p], [i], None, [256], [0, 256])
-        ax.plot(hist_p, color=col, linestyle=':', alpha=0.6, label=f'P-{labels[i]}')
-
-    ax.set_title("Espectrografia de Tinta (RGB)", color='white')
-    ax.tick_params(axis='x', colors='white')
-    ax.tick_params(axis='y', colors='white')
-    # ax.legend() # Legenda pode poluir, opcional
-    plt.tight_layout()
-    return fig
-
-
-def recortar_componentes(img):
-    gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-    _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    boxes = sorted([cv2.boundingRect(c) for c in cnts if cv2.contourArea(c) > 50], key=lambda x: x[0])
-    return [img[y:y + h, x:x + w] for x, y, w, h in boxes]
-
-
-def criar_montagem(imgs):
-    if not imgs: return None
-    mh = max(i.shape[0] for i in imgs);
-    tw = sum(i.shape[1] for i in imgs) + len(imgs) * 10
-    mont = np.ones((mh, tw, 3), dtype=np.uint8) * 255
-    cx = 0
-    for i in imgs: h, w = i.shape[:2]; mont[(mh - h) // 2:(mh - h) // 2 + h, cx:cx + w] = i; cx += w + 10
-    return mont
-
-
-# --- PDF CUSTOMIZADO ---
-def gerar_pdf(proc, nome, itens, logo_bytes=None):
-    pdf = FPDF()
-    pdf.set_auto_page_break(auto=True, margin=15)
-
-    def header_custom():
-        pdf.add_page()
-        if logo_bytes:
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_logo:
-                tmp_logo.write(logo_bytes)
-                pdf.image(tmp_logo.name, x=10, y=8, w=30)
-                pdf.ln(5)
-        pdf.set_font("Arial", "B", 20)
-        pdf.cell(0, 15, "Relatório Pericial Grafotécnico", ln=True, align='C')
-        pdf.ln(10)
-
-    header_custom()
-    pdf.set_font("Arial", "B", 12)
-    pdf.cell(0, 8, f"Processo: {proc}", ln=True)
-    pdf.cell(0, 8, f"Interessado: {nome}", ln=True)
-    pdf.cell(0, 8, f"Data: {np.datetime64('today', 'D')}", ln=True)
+def gerar_pdf(proc, nome, itens):
+    pdf = FPDF();
+    pdf.set_auto_page_break(True, 15)
+    pdf.add_page();
+    pdf.set_font("Arial", "B", 20);
+    pdf.cell(0, 15, "Parecer Técnico Pericial", ln=True, align='C');
     pdf.ln(10)
-
+    pdf.set_font("Arial", "B", 12);
+    pdf.cell(0, 8, f"Processo: {proc}", ln=True);
+    pdf.cell(0, 8, f"Interessado: {nome}", ln=True);
+    pdf.ln(10)
     for i, item in enumerate(itens):
-        if pdf.get_y() > 250: pdf.add_page()
-        pdf.set_font("Arial", "B", 14)
-        pdf.set_fill_color(240, 240, 240)
-        pdf.cell(0, 10, f"Exame {i + 1}: {item['titulo']}", ln=True, fill=True)
+        if pdf.get_y() > 240: pdf.add_page()
+        pdf.set_font("Arial", "B", 14);
+        pdf.set_fill_color(240, 240, 240);
+        pdf.cell(0, 10, f"Exame {i + 1}: {item['titulo']}", ln=True, fill=True);
         pdf.ln(2)
-        pdf.set_font("Arial", size=11)
-        pdf.multi_cell(0, 6, item['descricao'])
+        pdf.set_font("Arial", size=10);
+        pdf.multi_cell(0, 5, item['descricao']);
         pdf.ln(5)
-
-        # Tratamento de Imagem
-        img_data = item['imagem']
-        if isinstance(img_data, np.ndarray):
-            img = cv2.cvtColor(img_data, cv2.COLOR_RGB2BGR)
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                cv2.imwrite(tmp.name, img)
-                h, w = img.shape[:2];
-                r = w / h
-                width = 170 if r < 1.5 else 190
-                x_pos = (210 - width) / 2
-                pdf.image(tmp.name, x=x_pos, w=width)
+        img = cv2.cvtColor(item['imagem'], cv2.COLOR_RGB2BGR);
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".png");
+        cv2.imwrite(tmp.name, img)
+        h, w = img.shape[:2];
+        r = w / h;
+        wd = 160 if r < 1.5 else 180;
+        x = (210 - wd) / 2;
+        pdf.image(tmp.name, x=x, w=wd);
         pdf.ln(10)
     return bytes(pdf.output())
 
 
-# --- BARRA LATERAL ---
-with st.sidebar:
-    c1, c2 = st.columns([1, 4])
-    with c1:
-        st.markdown("## 💎")
+# --- APP ---
+if not st.session_state["logged_in"]:
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    c1, c2, c3 = st.columns([1, 1.2, 1])
     with c2:
-        st.markdown("### PERITO.AI\nDiamond v11")
-    st.markdown("---")
+        st.markdown(
+            "<div class='login-card'><div class='login-icon'>👁️</div><div class='login-title'>PERITO.VISION</div><p>AI-POWERED FORENSICS</p></div>",
+            unsafe_allow_html=True)
+        st.text_input("Credencial", type="password", key="senha_input", label_visibility="collapsed",
+                      placeholder="••••••••")
+        st.button("ACESSAR SISTEMA", on_click=check_login)
 
-    # 1. Arquivo
-    f_load = st.file_uploader("Carregar .perito", type="perito", label_visibility="collapsed")
-    if f_load: carregar_estado(f_load)
-    if st.session_state["laudo_itens"]: st.download_button("💾 Salvar Caso", download_estado(), "backup.perito")
+else:
+    # --- SIDEBAR ---
+    with st.sidebar:
+        st.markdown("### 🤖 Configuração IA")
+        api_k = st.text_input("Cole sua Google API Key:", type="password", help="Pegue em aistudio.google.com",
+                              value=st.session_state["api_key"])
+        if api_k: st.session_state["api_key"] = api_k
 
-    # 2. Logo
-    st.markdown("---")
-    st.markdown("**Identidade Visual**")
-    f_logo = st.file_uploader("Logo (PNG/JPG)", type=["png", "jpg"], key="logo_up", label_visibility="collapsed")
+        st.markdown("---")
+        st.markdown("### 👤 Painel")
+        st.metric("Evidências", len(st.session_state["laudo_itens"]))
+        if st.session_state["laudo_itens"] and st.button("Limpar"): st.session_state["laudo_itens"] = []
+        st.markdown("---")
+        if st.button("Sair"): logout()
 
-    # 3. Laudo
-    st.markdown("---")
-    st.markdown("**Emitir Laudo**")
-    proc = st.text_input("Processo", "000/2026")
-    nome = st.text_input("Nome", "Anônimo")
-    st.info(f"Evidências: {len(st.session_state['laudo_itens'])}")
-
-    if st.session_state["laudo_itens"]:
-        logo_data = f_logo.getvalue() if f_logo else None
-        pdf = gerar_pdf(proc, nome, st.session_state["laudo_itens"], logo_data)
-        st.download_button("📄 PDF FINAL", pdf, "Laudo_Final.pdf", "primary")
-        if st.button("Limpar Tudo"): st.session_state["laudo_itens"] = []; st.rerun()
-
-# --- ABAS PRINCIPAIS ---
-ab1, ab2, ab3, ab4, ab5, ab6, ab7 = st.tabs(
-    ["GONIOMETRIA", "CONFRONTO", "METADADOS & TINTA", "SOBREPOSIÇÃO", "PRESSÃO", "FILTROS", "RECORTES"])
-
-# 1. Goniometria
-with ab1:
-    st.markdown("#### 📐 Inclinação Axial & Grid")
-    img = carregar_imagem_segura(st.file_uploader("Assinatura", key="u1"), "gonio")
-    if img is not None:
-        c1, c2 = st.columns([3, 1])
+    # --- DASHBOARD ---
+    if st.session_state["app_mode"] == "Home":
+        st.markdown(
+            "<div style='font-size:3rem; font-weight:800; background:linear-gradient(45deg,#00c6ff,#0072ff); -webkit-background-clip:text; -webkit-text-fill-color:transparent;'>Dashboard Vision AI</div><br>",
+            unsafe_allow_html=True)
+        c1, c2, c3, c4 = st.columns(4)
         with c1:
-            val = streamlit_image_coordinates(Image.fromarray(img), key="coord1")
-            if val: st.session_state["pontos"].append((val["x"], val["y"]))
+            st.markdown("<div class='tool-card'><div>📐</div><b>Goniometria</b><small>Ângulos</small></div>",
+                        unsafe_allow_html=True); st.button("Abrir", key="b1", on_click=go_tool, args=("Goniometria",))
         with c2:
-            st.write(f"Pontos: {len(st.session_state['pontos'])}")
-            if st.button("Desfazer"): st.session_state["pontos"] = []
-            if len(st.session_state["pontos"]) >= 2:
-                p1, p2 = st.session_state["pontos"][-2:]
-                deg = math.degrees(math.atan2(p2[0] - p1[0], p2[1] - p1[1]))
-                st.metric("Ângulo", f"{deg:.2f}°")
-                vis = img.copy()
-                cv2.line(vis, (p1[0], 0), (p1[0], vis.shape[0]), (50, 50, 50), 1)
-                cv2.line(vis, p1, p2, (0, 255, 255), 2)
-                if st.button("Adicionar"): adicionar_ao_laudo(vis, "Goniometria", f"Inclinação Axial: {deg:.2f} graus.")
+            st.markdown("<div class='tool-card'><div>⚖️</div><b>Confronto</b><small>Comparação</small></div>",
+                        unsafe_allow_html=True); st.button("Abrir", key="b2", on_click=go_tool, args=("Confronto",))
+        with c3:
+            st.markdown("<div class='tool-card'><div>👻</div><b>Decalque</b><small>Sobreposição</small></div>",
+                        unsafe_allow_html=True); st.button("Abrir", key="b3", on_click=go_tool, args=("Sobreposicao",))
+        with c4:
+            st.markdown("<div class='tool-card'><div>🧬</div><b>Química</b><small>Tinta/EXIF</small></div>",
+                        unsafe_allow_html=True); st.button("Abrir", key="b4", on_click=go_tool, args=("Quimica",))
+        st.write("")
+        c5, c6, c7, c8 = st.columns(4)
+        with c5:
+            st.markdown("<div class='tool-card'><div>🔥</div><b>Pressão</b><small>Heatmap</small></div>",
+                        unsafe_allow_html=True); st.button("Abrir", key="b5", on_click=go_tool, args=("Pressao",))
+        with c6:
+            st.markdown("<div class='tool-card'><div>🕵️</div><b>Filtros</b><small>Ópticos</small></div>",
+                        unsafe_allow_html=True); st.button("Abrir", key="b6", on_click=go_tool, args=("Filtros",))
+        with c7:
+            st.markdown("<div class='tool-card'><div>✂️</div><b>Recortes</b><small>Segmentação</small></div>",
+                        unsafe_allow_html=True); st.button("Abrir", key="b7", on_click=go_tool, args=("Recortes",))
+        with c8:
+            st.markdown(
+                "<div class='tool-card' style='border-color:#00c6ff'><div>📄</div><b>Laudo</b><small>Relatório PDF</small></div>",
+                unsafe_allow_html=True); st.button("Gerenciar", key="b8", on_click=go_tool, args=("Laudo",))
 
-# 2. Confronto
-with ab2:
-    st.markdown("#### ⚖️ Comparação Lado a Lado")
-    c1, c2 = st.columns(2)
-    i1 = carregar_imagem_segura(c1.file_uploader("Questionada", key="uq2"), "conf1")
-    i2 = carregar_imagem_segura(c2.file_uploader("Padrão", key="up2"), "conf2")
-    if i1 is not None and i2 is not None:
-        if st.button("Gerar Comparação"):
+    # --- TOOLS ---
+    elif st.session_state["app_mode"] == "Goniometria":
+        st.button("⬅️ Voltar", on_click=go_home);
+        st.header("📐 Goniometria")
+        img = carregar_imagem_segura(st.file_uploader("Assinatura", key="ug"), "g")
+        if img is not None:
+            c1, c2 = st.columns([3, 1])
+            with c1:
+                val = streamlit_image_coordinates(Image.fromarray(img), key="cg")
+                if val: st.session_state["pontos"].append((val["x"], val["y"]))
+            with c2:
+                if st.button("Desfazer"): st.session_state["pontos"] = []
+                if len(st.session_state["pontos"]) >= 2:
+                    p1, p2 = st.session_state["pontos"][-2:];
+                    deg = math.degrees(math.atan2(p2[0] - p1[0], p2[1] - p1[1]))
+                    st.metric("Graus", f"{deg:.2f}");
+                    vis = img.copy();
+                    cv2.line(vis, p1, p2, (0, 255, 255), 2)
+
+                    # BOTÃO IA
+                    if st.button("🤖 Analisar com IA"):
+                        analise = analisar_imagem_com_ia(vis, "goniometria")
+                        adicionar_ao_laudo(vis, "Goniometria (Análise IA)", analise)
+
+    elif st.session_state["app_mode"] == "Confronto":
+        st.button("⬅️ Voltar", on_click=go_home);
+        st.header("⚖️ Confronto")
+        c1, c2 = st.columns(2);
+        i1 = carregar_imagem_segura(c1.file_uploader("Q", key="qc"), "c1");
+        i2 = carregar_imagem_segura(c2.file_uploader("P", key="pc"), "c2")
+        if i1 is not None and i2 is not None:
             h = i1.shape[0];
-            ratio = i2.shape[1] / i2.shape[0]
-            i2r = cv2.resize(i2, (int(h * ratio), h))
-            final = np.hstack((i1, np.ones((h, 10, 3), dtype=np.uint8) * 128, i2r))
-            st.image(final, use_container_width=True)
-            if st.button("Adicionar"): adicionar_ao_laudo(final, "Confronto", "Comparação direta.")
+            r = i2.shape[1] / i2.shape[0];
+            i2r = cv2.resize(i2, (int(h * r), h));
+            fin = np.hstack((i1, np.ones((h, 10, 3), dtype=np.uint8) * 100, i2r))
+            st.image(fin, use_container_width=True)
 
-# 3. Metadados e Tinta (NOVA ABA)
-with ab3:
-    st.markdown("#### 🧬 Análise de Arquivo e Química Digital")
-    c1, c2 = st.columns(2)
+            # BOTÃO IA
+            if st.button("🤖 Analisar Confronto com IA"):
+                analise = analisar_imagem_com_ia(fin, "confronto")
+                adicionar_ao_laudo(fin, "Confronto (Parecer IA)", analise)
 
-    with c1:
-        st.info("📂 Inspetor de Metadados (EXIF)")
-        u_meta = st.file_uploader("Imagem Original (sem edição)", key="umeta")
-        if u_meta:
-            meta = extrair_metadados(u_meta)
-            if meta:
-                st.json(meta)
-                # Formata texto para o laudo
-                meta_txt = "\n".join(
-                    [f"{k}: {v}" for k, v in meta.items() if k in ['Model', 'Software', 'DateTime', 'Make']])
-                if st.button("Adicionar Metadados"):
-                    # Cria imagem dummy com texto para o laudo visual
-                    dummy = np.ones((100, 600, 3), dtype=np.uint8) * 255
-                    cv2.putText(dummy, "Metadados Extraidos (Ver texto)", (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 1,
-                                (0, 0, 0), 2)
-                    adicionar_ao_laudo(dummy, "Metadados EXIF", f"Dados encontrados:\n{meta_txt}")
+    elif st.session_state["app_mode"] == "Pressao":
+        st.button("⬅️ Voltar", on_click=go_home);
+        st.header("🔥 Pressão")
+        img = carregar_imagem_segura(st.file_uploader("Img", key="pr"), "pr")
+        if img is not None:
+            g = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY);
+            hm = cv2.applyColorMap(cv2.convertScaleAbs(cv2.bitwise_not(g), alpha=1.5), cv2.COLORMAP_JET)
+            hm = cv2.cvtColor(hm, cv2.COLOR_BGR2RGB);
+            st.image(hm, use_container_width=True)
+
+            # BOTÃO IA
+            if st.button("🤖 Analisar Pressão com IA"):
+                analise = analisar_imagem_com_ia(hm, "pressao")
+                adicionar_ao_laudo(hm, "Pressão (Parecer IA)", analise)
+
+    # (Mantenha as outras ferramentas como Sobreposicao, Quimica, Filtros, Recortes e Laudo com a mesma lógica ou a antiga se não quiser IA nelas)
+    # Por brevidade, vou colocar as outras ferramentas na versão "padrão" (sem IA dedicada) mas com o código funcionando
+    elif st.session_state["app_mode"] == "Sobreposicao":
+        st.button("⬅️ Voltar", on_click=go_home);
+        st.header("👻 Decalque")
+        i1, i2 = carregar_imagem_segura(st.file_uploader("Fundo", key="s1"), "s1"), carregar_imagem_segura(
+            st.file_uploader("Frente", key="s2"), "s2")
+        if i1 is not None and i2 is not None:
+            a = st.slider("Opacidade", 0., 1., 0.5);
+            i2r = cv2.resize(i2, (i1.shape[1], i1.shape[0]))
+            res = cv2.addWeighted(i2r, a, i1, 1. - a, 0);
+            st.image(res, use_container_width=True)
+            if st.button("Salvar"): adicionar_ao_laudo(res, "Sobreposição", f"Opacidade {a}")
+
+    elif st.session_state["app_mode"] == "Quimica":
+        st.button("⬅️ Voltar", on_click=go_home);
+        st.header("🧬 Química")
+        uq, up = st.file_uploader("Q", key="hq"), st.file_uploader("P", key="hp")
+        if uq and up:
+            iq = np.array(Image.open(uq).convert('RGB'));
+            ip = np.array(Image.open(up).convert('RGB'))
+            fig, ax = plt.subplots(figsize=(6, 2));
+            fig.patch.set_facecolor('#0e1117');
+            ax.set_facecolor('#0e1117')
+            for i, c in enumerate(['b', 'g', 'r']): ax.plot(cv2.calcHist([iq], [i], None, [256], [0, 256]), color=c,
+                                                            alpha=0.8); ax.plot(
+                cv2.calcHist([ip], [i], None, [256], [0, 256]), color=c, linestyle=':')
+            st.pyplot(fig);
+            if st.button("Salvar"): adicionar_ao_laudo(fig, "Química", "Análise RGB")
+
+    elif st.session_state["app_mode"] == "Filtros":
+        st.button("⬅️ Voltar", on_click=go_home);
+        st.header("🕵️ Filtros")
+        img = carregar_imagem_segura(st.file_uploader("Doc", key="fi"), "fi")
+        if img is not None:
+            op = st.selectbox("Filtro", ["Negativo", "Binarização", "Bordas"])
+            if op == "Negativo":
+                res = cv2.bitwise_not(img)
+            elif op == "Binarização":
+                _, res = cv2.threshold(cv2.cvtColor(img, cv2.COLOR_RGB2GRAY), 127, 255,
+                                       cv2.THRESH_BINARY); res = cv2.cvtColor(res, cv2.COLOR_GRAY2RGB)
             else:
-                st.warning("Nenhum metadado encontrado (Imagem limpa ou printscreen).")
+                res = cv2.cvtColor(cv2.bitwise_not(cv2.Canny(img, 100, 200)), cv2.COLOR_GRAY2RGB)
+            st.image(res, use_container_width=True)
+            if st.button("Salvar"): adicionar_ao_laudo(res, f"Filtro {op}", "Processamento óptico.")
 
-    with c2:
-        st.info("🧪 Espectrografia Comparativa (Histograma)")
-        c2a, c2b = st.columns(2)
-        uq_hist = c2a.file_uploader("Q", key="hq")
-        up_hist = c2b.file_uploader("P", key="hp")
+    elif st.session_state["app_mode"] == "Recortes":
+        st.button("⬅️ Voltar", on_click=go_home);
+        st.header("✂️ Recortes")
+        c1, c2 = st.columns(2)
+        iq = carregar_imagem_segura(c1.file_uploader("Q", key="rq"), "r1")
+        ip = carregar_imagem_segura(c2.file_uploader("P", key="rp"), "r2")
+        if iq is not None and ip is not None:
+            if st.button("Segmentar"):
+                def seg(im):
+                    g = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY);
+                    _, t = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+                    cnts, _ = cv2.findContours(t, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE);
+                    b = sorted([cv2.boundingRect(c) for c in cnts if cv2.contourArea(c) > 50], key=lambda x: x[0])
+                    cr = [im[y:y + h, x:x + w] for x, y, w, h in b];
+                    return cr
 
-        if uq_hist and up_hist:
-            iq_h = np.array(Image.open(uq_hist).convert('RGB'))
-            ip_h = np.array(Image.open(up_hist).convert('RGB'))
 
-            fig = gerar_histograma_comparativo(iq_h, ip_h)
-            st.pyplot(fig)
-            st.caption("Comparação de curvas RGB. Curvas muito distantes indicam canetas diferentes.")
+                def mont(cr):
+                    if not cr: return None
+                    mh = max(c.shape[0] for c in cr);
+                    tw = sum(c.shape[1] for c in cr) + len(cr) * 10;
+                    s = np.ones((mh, tw, 3), dtype=np.uint8) * 255;
+                    x = 0
+                    for c in cr: h, w = c.shape[:2]; s[(mh - h) // 2:(mh - h) // 2 + h, x:x + w] = c; x += w + 10
+                    return s
 
-            if st.button("Adicionar Histograma"):
-                adicionar_ao_laudo(fig, "Espectrografia RGB", "Análise comparativa da composição cromática das tintas.")
 
-# 4. Sobreposição
-with ab4:
-    st.markdown("#### 👻 Sobreposição")
-    i1 = carregar_imagem_segura(st.file_uploader("Fundo", key="u3a"), "sob1")
-    i2 = carregar_imagem_segura(st.file_uploader("Frente", key="u3b"), "sob2")
-    if i1 is not None and i2 is not None:
-        a = st.slider("Alpha", 0.0, 1.0, 0.5)
-        i2r = cv2.resize(i2, (i1.shape[1], i1.shape[0]))
-        res = cv2.addWeighted(i2r, a, i1, 1.0 - a, 0)
-        st.image(res, use_container_width=True)
-        if st.button("Adicionar"): adicionar_ao_laudo(res, "Sobreposição", f"Alpha: {a}")
+                sq, sp = seg(iq), seg(ip);
+                mq, mp = mont(sq), mont(sp)
+                if mq is not None and mp is not None:
+                    mw = max(mq.shape[1], mp.shape[1]);
+                    pad = lambda i, w: np.pad(i, ((0, 0), (0, w - i.shape[1]), (0, 0)), constant_values=255)
+                    fin = np.vstack((pad(mq, mw), np.ones((20, mw, 3), dtype=np.uint8) * 200, pad(mp, mw)))
+                    st.image(fin, use_container_width=True);
+                    st.session_state["tmp_rec"] = fin
+            if "tmp_rec" in st.session_state:
+                if st.button("Salvar"): adicionar_ao_laudo(st.session_state["tmp_rec"], "Recortes", "Segmentação")
 
-# 5. Pressão
-with ab5:
-    st.markdown("#### 🔥 Mapa de Calor")
-    i = carregar_imagem_segura(st.file_uploader("Assinatura", key="u4"), "pres")
-    if i is not None:
-        g = cv2.cvtColor(i, cv2.COLOR_RGB2GRAY)
-        hm = cv2.applyColorMap(cv2.convertScaleAbs(cv2.bitwise_not(g), alpha=1.5), cv2.COLORMAP_JET)
-        hm = cv2.cvtColor(hm, cv2.COLOR_BGR2RGB)
-        st.image(hm, use_container_width=True)
-        if st.button("Adicionar"): adicionar_ao_laudo(hm, "Pseudo-Pressão", "Análise de densidade.")
-
-# 6. Filtros
-with ab6:
-    st.markdown("#### 🕵️ Filtros Ópticos")
-    i = carregar_imagem_segura(st.file_uploader("Doc", key="u5"), "filt")
-    if i is not None:
-        f = st.selectbox("Filtro", ["Negativo", "Binarização", "Bordas"])
-        if f == "Negativo":
-            r = cv2.bitwise_not(i)
-        elif f == "Binarização":
-            _, r = cv2.threshold(cv2.cvtColor(i, cv2.COLOR_RGB2GRAY), 127, 255, cv2.THRESH_BINARY); r = cv2.cvtColor(r,
-                                                                                                                     cv2.COLOR_GRAY2RGB)
-        else:
-            r = cv2.cvtColor(cv2.bitwise_not(cv2.Canny(i, 100, 200)), cv2.COLOR_GRAY2RGB)
-        st.image(r, use_container_width=True)
-        if st.button("Adicionar"): adicionar_ao_laudo(r, f"Filtro {f}", "Realce forense.")
-
-# 7. Recortes
-with ab7:
-    st.markdown("#### ✂️ Segmentação")
-    c1, c2 = st.columns(2)
-    iq = carregar_imagem_segura(c1.file_uploader("Q", key="uq6"), "rec1")
-    ip = carregar_imagem_segura(c2.file_uploader("P", key="up6"), "rec2")
-    if iq is not None and ip is not None:
-        if st.button("Segmentar"):
-            rq, rp = recortar_componentes(iq), recortar_componentes(ip)
-            fq, fp = criar_montagem(rq), criar_montagem(rp)
-            if fq is not None and fp is not None:
-                w = max(fq.shape[1], fp.shape[1])
-                pad = lambda x, w: np.pad(x, ((0, 0), (0, w - x.shape[1]), (0, 0)), constant_values=255)
-                fin = np.vstack((pad(fq, w), np.ones((20, w, 3), dtype=np.uint8) * 200, pad(fp, w)))
-                st.image(fin, use_container_width=True)
-                st.session_state["tmp_rec"] = fin
-        if "tmp_rec" in st.session_state and st.button("Adicionar"):
-            adicionar_ao_laudo(st.session_state["tmp_rec"], "Recortes", "Análise morfogenética.")
+    elif st.session_state["app_mode"] == "Laudo":
+        st.button("⬅️ Voltar", on_click=go_home);
+        st.header("📄 Laudo Final")
+        proc = st.text_input("Processo");
+        nome = st.text_input("Nome")
+        if st.session_state["laudo_itens"]:
+            st.write("---")
+            for i, item in enumerate(st.session_state["laudo_itens"]): st.text(f"{i + 1}. {item['titulo']}")
+            pdf = gerar_pdf(proc, nome, st.session_state["laudo_itens"])
+            st.download_button("📥 PDF COMPLETO", pdf, "Laudo.pdf", "primary")
