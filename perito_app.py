@@ -184,15 +184,21 @@ if not st.session_state["logged_in"]:
         st.button("ACESSAR SISTEMA", on_click=check_login)
 
 else:
-    # --- SIDEBAR ---
+    # --- SIDEBAR INTELIGENTE ---
     with st.sidebar:
-        st.markdown("### 🤖 Configuração IA")
-        api_k = st.text_input("Cole sua Google API Key:", type="password", help="Pegue em aistudio.google.com",
-                              value=st.session_state["api_key"])
-        if api_k: st.session_state["api_key"] = api_k
+        # Tenta pegar a chave dos segredos do servidor
+        if "api_key" in st.secrets:
+            st.session_state["api_key"] = st.secrets["api_key"]
+            st.success("✅ IA Conectada (Chave Segura)")
+        else:
+            # Se não achar, pede para digitar
+            st.markdown("### 🤖 Configuração IA")
+            api_k = st.text_input("Cole sua Google API Key:", type="password", value=st.session_state["api_key"])
+            if api_k: st.session_state["api_key"] = api_k
 
         st.markdown("---")
         st.markdown("### 👤 Painel")
+        # ... (resto do código igual)
         st.metric("Evidências", len(st.session_state["laudo_itens"]))
         if st.session_state["laudo_itens"] and st.button("Limpar"): st.session_state["laudo_itens"] = []
         st.markdown("---")
